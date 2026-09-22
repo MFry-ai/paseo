@@ -958,7 +958,10 @@ describe("relative typed-entry configuration", () => {
 // A home-directory scan is dominated by per-entry bookkeeping, not by reading the tree. These
 // budgets are expressed against a plain readdir walk of the same tree, so they mean the same
 // thing on a slow CI runner as on a developer machine.
-describe("home-tree scan cost", () => {
+//
+// Skipped on Windows: the tree this needs is deeper than MAX_PATH allows, and the directory
+// listing cache this measures is disabled there because directory metadata cannot validate it.
+describe.skipIf(isWindows)("home-tree scan cost", () => {
   const ENTRIES = 5_000;
   const DEPTH = 8;
   // Long names cost more to normalize, and per-entry path work is spent normalizing them.
