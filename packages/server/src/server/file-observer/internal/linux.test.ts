@@ -14,7 +14,7 @@ import { createObserverPaths } from "./paths.js";
 // loudly instead of silently dropping a create or delete.
 test("the linux backend fails the observation when the classification queue overflows", async () => {
   const root = await mkdtemp(join(tmpdir(), "linux-classify-"));
-  const paths = createObserverPaths("linux");
+  const paths = createObserverPaths(process.platform);
   const notifications = new EventEmitter();
   const observer = createFileObserver();
   let active = true;
@@ -70,7 +70,9 @@ test("an ignore update drains classifications queued below the new excluded root
   await mkdir(ignored);
   const tracked = join(root, "tracked.txt");
   await writeFile(tracked, "tracked");
-  const paths = createObserverPaths("linux");
+  // The backend is injected for deterministic queue admission, but its real
+  // temporary root uses the host filesystem's path format.
+  const paths = createObserverPaths(process.platform);
   let onRootChange: ((eventType: string, filename: string | null) => void) | null = null;
   const observer = createFileObserver();
   let active = true;
