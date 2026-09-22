@@ -11172,3 +11172,45 @@ test("commits startup notices once on create and after restored history", async 
     rmSync(workdir, { recursive: true, force: true });
   }
 });
+
+test("failed startup history closes the session without registering an agent", async () => {
+  let closed = false;
+  class FailingHistorySession extends TestAgentSession {
+    readonly initialTimeline = [
+      {
+        item: { type: "notification", level: "info", message: "Runtime v2" } as const,
+        timestamp: "2026-09-22T00:00:00.000Z",
+      },
+    ];
+    override async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+      yield {
+        type: "timeline",
+        provider: "codex",
+        item: { type: "assistant_message", text: "Partial history" },
+      };
+      throw new Error("History unavailable");
+    }
+    override async close() {
+      closed = true;
+      await super.close();
+    }
+  }
+  const client = new (class extends TestAgentClient {
+    override async resumeSession() {
+      return new FailingHistorySession({ provider: "codex", cwd: tmpdir() });
+    }
+  })();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  try {
+    await expect(
+      manager.resumeAgentFromPersistence({
+        provider: "codex",
+        sessionId: "failed-history",
+        metadata: { cwd: tmpdir() },
+      }),
+    ).rejects.toThrow("History unavailable");
+    expect({ agents: manager.listAgents(), closed }).toEqual({ agents: [], closed: true });
+  } finally {
+    for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+  }
+});

@@ -3459,6 +3459,15 @@ export class AgentManager {
         options,
       });
 
+      // Read history before publishing the agent: a provider failure must leave the
+      // session unregistered so the registration catch closes it.
+      const startupHistory: AgentStreamEvent[] = [];
+      if (session.initialTimeline?.length && !managed.historyPrimed) {
+        for await (const event of session.streamHistory()) {
+          startupHistory.push(event);
+        }
+      }
+
       this.assertAcceptingAgentRegistrations();
       this.agents.set(resolvedAgentId, managed);
       registered = true;
@@ -3467,7 +3476,7 @@ export class AgentManager {
       if (session.initialTimeline?.length) {
         if (!managed.historyPrimed) {
           // Legacy/imported chats need their existing history before startup rows.
-          await this.primeTimelineFromLegacyProviderHistory(managed, false);
+          await this.primeTimelineFromLegacyProviderHistory(managed, false, startupHistory);
         } else {
           for (const entry of session.initialTimeline) {
             this.recordTimeline(managed.id, entry.item, { timestamp: entry.timestamp });
@@ -4005,6 +4014,9 @@ export class AgentManager {
   private async primeTimelineFromLegacyProviderHistory(
     agent: ActiveManagedAgent,
     broadcast: boolean | (() => boolean),
+    history:
+      | AsyncIterable<AgentStreamEvent>
+      | Iterable<AgentStreamEvent> = agent.session.streamHistory(),
   ): Promise<void> {
     const deferredBroadcast = typeof broadcast === "function";
     const timelineEvents: Array<{
@@ -4014,7 +4026,7 @@ export class AgentManager {
     const providerSubagentEvents: AgentManagerEvent[] = [];
     agent.historyPrimed = false;
     try {
-      for await (const rawEvent of agent.session.streamHistory()) {
+      for await (const rawEvent of history) {
         const event = limitAgentStreamEventContent(rawEvent);
         if (event.type === "provider_subagent") {
           const update = this.providerSubagents.apply(agent.id, event.provider, event.event);
