@@ -29,6 +29,90 @@ afterEach(() => {
 });
 
 describe("OpenCodeServerManager generations", () => {
+  test("getInstance returns distinct managers for distinct runtime settings", async () => {
+    const runtimeA = new FakeOpenCodeServerRuntime([5001, 5002], { autoAnnounce: true });
+    const runtimeB = new FakeOpenCodeServerRuntime([5011, 5012], { autoAnnounce: true });
+    const logger = createTestLogger();
+
+    const managerA = OpenCodeServerManager.getInstance(
+      logger,
+      { command: "opencode-a" },
+      {
+        managedProcesses: runtimeA.managedProcesses,
+        portAllocator: runtimeA.allocatePort,
+        resolveCommandPrefix: runtimeA.resolveCommandPrefix,
+        spawnServerProcess: runtimeA.spawnServerProcess,
+        terminateProcess: runtimeA.terminateProcess,
+      },
+    );
+
+    const managerB = OpenCodeServerManager.getInstance(
+      logger,
+      { command: "opencode-b" },
+      {
+        managedProcesses: runtimeB.managedProcesses,
+        portAllocator: runtimeB.allocatePort,
+        resolveCommandPrefix: runtimeB.resolveCommandPrefix,
+        spawnServerProcess: runtimeB.spawnServerProcess,
+        terminateProcess: runtimeB.terminateProcess,
+      },
+    );
+
+    expect(managerA).not.toBe(managerB);
+
+    const acquisitionA = await managerA.acquireCurrent();
+    const acquisitionB = await managerB.acquireCurrent();
+
+    expect(acquisitionA.server.url).toBe("http://127.0.0.1:5001");
+    expect(acquisitionB.server.url).toBe("http://127.0.0.1:5011");
+    expect(runtimeA.launchedPorts).toEqual([5001]);
+    expect(runtimeB.launchedPorts).toEqual([5011]);
+
+    await acquisitionA.release();
+    await acquisitionB.release();
+    await managerA.shutdown();
+    await managerB.shutdown();
+    expect(runtimeA.terminatedPorts).toEqual([5001]);
+    expect(runtimeB.terminatedPorts).toEqual([5011]);
+  });
+
+  test("getInstance returns same manager for identical runtime settings", async () => {
+    const runtime = new FakeOpenCodeServerRuntime([5101], { autoAnnounce: true });
+    const logger = createTestLogger();
+
+    const manager1 = OpenCodeServerManager.getInstance(
+      logger,
+      { command: "opencode-same" },
+      {
+        managedProcesses: runtime.managedProcesses,
+        portAllocator: runtime.allocatePort,
+        resolveCommandPrefix: runtime.resolveCommandPrefix,
+        spawnServerProcess: runtime.spawnServerProcess,
+        terminateProcess: runtime.terminateProcess,
+      },
+    );
+
+    const manager2 = OpenCodeServerManager.getInstance(
+      logger,
+      { command: "opencode-same" },
+      {
+        managedProcesses: runtime.managedProcesses,
+        portAllocator: runtime.allocatePort,
+        resolveCommandPrefix: runtime.resolveCommandPrefix,
+        spawnServerProcess: runtime.spawnServerProcess,
+        terminateProcess: runtime.terminateProcess,
+      },
+    );
+
+    expect(manager1).toBe(manager2);
+
+    const acquisition = await manager1.acquireCurrent();
+    expect(acquisition.server.url).toBe("http://127.0.0.1:5101");
+    await acquisition.release();
+    await manager1.shutdown();
+    expect(runtime.terminatedPorts).toEqual([5101]);
+  });
+
   test("logs generation lifecycle transitions", async () => {
     const { logger, records } = createCapturingLogger();
     const { manager } = createTestManager([4081, 4082], { logger });
