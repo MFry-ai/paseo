@@ -8,6 +8,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -952,4 +953,80 @@ describe("relative typed-entry configuration", () => {
 
     expect(results).toEqual([{ path: "blankpage/editor", kind: "directory" }]);
   });
+});
+
+// A home-directory scan is dominated by per-entry bookkeeping, not by reading the tree. These
+// budgets are expressed against a plain readdir walk of the same tree, so they mean the same
+// thing on a slow CI runner as on a developer machine.
+describe("home-tree scan cost", () => {
+  const ENTRIES = 5_000;
+  const DEPTH = 8;
+  // Long names cost more to normalize, and per-entry path work is spent normalizing them.
+  const SEGMENT_NAME_LENGTH = 48;
+  let scanRoot: string;
+
+  function buildDeepTree(root: string): void {
+    const chains = Math.ceil(ENTRIES / DEPTH);
+    for (let chain = 0; chain < chains; chain += 1) {
+      const segments: string[] = [];
+      for (let level = 0; level < DEPTH; level += 1) {
+        segments.push(`d${chain * DEPTH + level}`.padEnd(SEGMENT_NAME_LENGTH, "x"));
+      }
+      mkdirSync(path.join(root, ...segments), { recursive: true });
+    }
+  }
+
+  async function readWholeTree(root: string): Promise<void> {
+    let level = [root];
+    while (level.length) {
+      const next: string[] = [];
+      for (const directory of level) {
+        const children = await readdir(directory, { withFileTypes: true }).catch(() => []);
+        for (const child of children) {
+          if (child.isDirectory()) next.push(path.join(directory, child.name));
+        }
+      }
+      level = next;
+    }
+  }
+
+  async function measure(run: () => Promise<unknown>): Promise<number> {
+    const startedAt = process.hrtime.bigint();
+    await run();
+    return Number(process.hrtime.bigint() - startedAt) / 1e6;
+  }
+
+  // Nothing matches, so every scan spends its whole budget and the timings are comparable.
+  const scanDeepTree = () =>
+    searchAbsoluteDirectoryPaths({
+      homeDir: scanRoot,
+      query: "nomatchanywhereinthistree",
+      limit: 30,
+      maxDepth: DEPTH + 4,
+      maxDirectoriesScanned: ENTRIES,
+    });
+
+  beforeEach(() => {
+    scanRoot = realpathSync.native(mkdtempSync(path.join(tmpdir(), "directory-scan-cost-")));
+    buildDeepTree(scanRoot);
+  });
+
+  afterEach(() => {
+    rmSync(scanRoot, { recursive: true, force: true });
+  });
+
+  it("scans a deep tree within a bounded multiple of reading it", async () => {
+    const readMs = await measure(() => readWholeTree(scanRoot));
+    await scanDeepTree();
+    const scanMs = await measure(scanDeepTree);
+
+    // Re-deriving containment and Git-ignore state for every ancestor of every entry, and
+    // sweeping the directory cache on every miss, put this past 12x. That is what made real
+    // home directories exceed the client request timeout.
+    const ratio = scanMs / readMs;
+    expect({ ratio: Math.round(ratio), withinBudget: ratio < 6 }).toEqual({
+      ratio: expect.any(Number),
+      withinBudget: true,
+    });
+  }, 60_000);
 });
