@@ -27,9 +27,7 @@ const LATE_IGNORED_FILES = readPositiveInteger("PASEO_WATCH_BENCH_LATE_IGNORED_F
 // directory-churn mode exercises removeSubtree/reconcileSubtree/paths.collapse
 // in packages/server/src/server/file-observer/internal/native-recursive.ts,
 // which the healthy and late-ignored fixtures never touch: they only
-// mkdir/writeFile, and every delete happens after unsubscribe. See
-// docs/superpowers/plans/2026-09-13-directory-churn-baseline.md for what this
-// mode measures and why.
+// mkdir/writeFile, and every delete happens after unsubscribe.
 const CHURN_DIRECTORY_COUNT = readPositiveInteger("PASEO_WATCH_BENCH_CHURN_DIRECTORIES", 20_000);
 const CHURN_FILES_PER_DIRECTORY = readPositiveInteger(
   "PASEO_WATCH_BENCH_CHURN_FILES_PER_DIRECTORY",
@@ -408,10 +406,7 @@ async function measure(run: number): Promise<Measurement> {
 // directory-churn mode. Unlike healthy/late-ignored, this builds one large
 // tracked tree and then repeatedly makes whole known directories disappear —
 // the only way to invoke removeSubtree, reconcileSubtree, and paths.collapse
-// in native-recursive.ts. See
-// docs/superpowers/plans/2026-09-13-directory-churn-baseline.md for the
-// recorded baseline and the invocation counts that prove this mode reaches
-// that code.
+// in native-recursive.ts.
 async function measureDirectoryChurn(run: number): Promise<Measurement> {
   const totalChurnTargets = CHURN_ROUNDS * CHURN_DIRECTORIES_PER_ROUND;
   if (totalChurnTargets > CHURN_DIRECTORY_COUNT) {
@@ -732,8 +727,7 @@ function evaluate(results: Measurement[]): {
   if (MODE === "directory-churn") {
     // This phase exists to characterize a known-bad code path (removeSubtree
     // and reconcileSubtree scanning the whole tracked set per disappeared
-    // directory), not to gate CI on a threshold yet. See
-    // docs/superpowers/plans/2026-09-13-directory-churn-baseline.md.
+    // directory), not to gate CI on a threshold yet.
     return { passed: true, failures: [] };
   }
   const failures: string[] = [];

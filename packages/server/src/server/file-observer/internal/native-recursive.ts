@@ -102,11 +102,14 @@ class NativeRecursiveBackend implements ObservationBackend {
   }
 
   async updateIgnore(): Promise<void> {
+    this.discardIgnoredClassifications();
+    const inFlight = [...this.classifications];
     this.generation += 1;
     this.cancelAudits();
     this.fullAuditRequested = true;
     this.auditQueued = true;
     await this.enqueueAudit(true, this.generation);
+    await Promise.allSettled(inFlight);
   }
 
   close(): Promise<void> {
@@ -666,6 +669,16 @@ class NativeRecursiveBackend implements ObservationBackend {
     }
     this.classificationQueue.push({ path, onPresent });
     this.pumpClassifications();
+  }
+
+  private discardIgnoredClassifications(): void {
+    let kept = 0;
+    for (const classification of this.classificationQueue) {
+      if (!this.host.isIgnored(classification.path)) {
+        this.classificationQueue[kept++] = classification;
+      }
+    }
+    this.classificationQueue.length = kept;
   }
 
   private pumpClassifications(): void {

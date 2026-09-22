@@ -66,6 +66,8 @@ class LinuxBackend implements ObservationBackend {
   }
 
   async updateIgnore(): Promise<void> {
+    this.discardIgnoredClassifications();
+    const inFlight = [...this.classifications];
     for (const [directory, watcher] of this.watchers) {
       if (directory !== this.host.root && this.host.isIgnored(directory)) {
         watcher.close();
@@ -74,6 +76,7 @@ class LinuxBackend implements ObservationBackend {
     }
     this.cancelQueued();
     await this.enqueue([this.host.root]);
+    await Promise.allSettled(inFlight);
   }
 
   close(): Promise<void> {
@@ -290,6 +293,16 @@ class LinuxBackend implements ObservationBackend {
     }
     this.classificationQueue.push({ path });
     this.pumpClassifications();
+  }
+
+  private discardIgnoredClassifications(): void {
+    let kept = 0;
+    for (const classification of this.classificationQueue) {
+      if (!this.host.isIgnored(classification.path)) {
+        this.classificationQueue[kept++] = classification;
+      }
+    }
+    this.classificationQueue.length = kept;
   }
 
   private pumpClassifications(): void {

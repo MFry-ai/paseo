@@ -131,6 +131,60 @@ test("a file announced only as changed remains visible to coalesced deletion sca
   }
 });
 
+test("a native ignore update drains classifications queued below the new excluded root", async () => {
+  const root = await mkdtemp(join(tmpdir(), "native-ignore-queue-"));
+  const ignored = join(root, "generated");
+  await mkdir(ignored);
+  const tracked = join(root, "tracked.txt");
+  await writeFile(tracked, "tracked");
+  const paths = createObserverPaths(process.platform);
+  const notifications = new EventEmitter();
+  const observer = createFileObserver();
+  let active = true;
+  let ignoreGenerated = false;
+  const delivered: string[] = [];
+  const backend = createNativeRecursiveBackend(
+    {
+      root,
+      metrics: observer.getDiagnostics(),
+      isActive: () => active,
+      isIgnored: (path) => ignoreGenerated && paths.isInside(ignored, path),
+      isPathInside: paths.isInside,
+      queueEvent: (type, path) => {
+        if (type === "create") delivered.push(path);
+      },
+      fail: (error) => {
+        throw error;
+      },
+    },
+    paths,
+    (_root, listener) => {
+      notifications.on("change", listener);
+      return {
+        close: () => notifications.removeAllListeners(),
+        on: (event, onError) => notifications.on(event, onError),
+      };
+    },
+  );
+  try {
+    await backend.start();
+    for (let index = 0; index < 2_000; index += 1) {
+      notifications.emit("change", "rename", join(ignored, `file-${index}.js`));
+    }
+    notifications.emit("change", "rename", tracked);
+    expect(backend.getDiagnostics().pendingClassificationCount).toBeGreaterThan(0);
+    ignoreGenerated = true;
+    await backend.updateIgnore();
+    expect(backend.getDiagnostics().pendingClassificationCount).toBeLessThanOrEqual(1);
+    await expect.poll(() => delivered.includes(tracked)).toBe(true);
+  } finally {
+    active = false;
+    await backend.close();
+    await observer.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 // One fs.stat per native event is how a single dependency install pins the
 // libuv threadpool and the daemon stops answering.
 test("a rename burst does not spawn one stat per event", async () => {
