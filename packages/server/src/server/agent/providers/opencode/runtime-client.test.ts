@@ -3,13 +3,15 @@ import { openCodeMajorVersion } from "./runtime-client.js";
 
 test.each([
   ["1.14.46", 1],
+  ["unexpected wrapper output", 1],
+  ["", 1],
   ["opencode v2.0.10\n", 2],
   ["v2.0.10-beta.1", 2],
 ])("identifies the OpenCode runtime version %s", (output, major) => {
   expect(openCodeMajorVersion(String(output))).toBe(major);
 });
 
-test.each(["3.0.0", "2.0.9", "2.0.7", "2.0.4", "2.0.3", "v2.0.1", "unexpected wrapper output", ""])(
+test.each(["3.0.0", "2.0.9", "2.0.7", "2.0.4", "2.0.3", "v2.0.1"])(
   "rejects unsupported OpenCode version output %s",
   (output) => {
     expect(() => openCodeMajorVersion(output)).toThrow();
@@ -127,3 +129,36 @@ test("appends a first notice after old history and records a changed major versi
     await client.shutdown();
   }
 });
+
+test.each([
+  "process.exit(1)",
+  'console.log("custom wrapper output")',
+  "setTimeout(() => {}, 30000)",
+])(
+  "preserves legacy operations when the version probe is inconclusive: %s",
+  async (source) => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { OpenCodeRuntimeClient } = await import("./runtime-client.js");
+    const { OpenCodeAgentClient } = await import("../opencode-agent.js");
+    const { createTestLogger } = await import("../../../../test-utils/test-logger.js");
+    const root = await mkdtemp(join(tmpdir(), "opencode-legacy-probe-"));
+    const script = join(root, "version.cjs");
+    await writeFile(script, source);
+    const logger = createTestLogger();
+    const client = new OpenCodeRuntimeClient(logger, {
+      command: { mode: "replace", argv: [process.execPath, script] },
+    });
+    const legacy = new OpenCodeAgentClient(logger);
+    const config = { provider: "opencode", cwd: root };
+    try {
+      expect(await client.listFeatures(config)).toEqual(await legacy.listFeatures(config));
+    } finally {
+      await client.shutdown();
+      await legacy.shutdown();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  10000,
+);
