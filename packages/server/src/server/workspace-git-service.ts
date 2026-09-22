@@ -1718,11 +1718,11 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     // runs for a directory this target has never seen before, not on every
     // event.
     const matchesWatchPath = createRealpathAwarePathMatcher(target.watchPath);
-    let discovered = false;
-    // Dedup per batch: a burst of thousands of events in one directory must
-    // pay this cost once, not once per event.
-    const directories = new Set(events.map((event) => dirname(event.path)));
-    for (const directory of directories) {
+    // One new directory is enough: the scheduled Git query inventories every
+    // ignored directory that exists by then. Stop before a large event batch
+    // multiplies containment checks across all its new directories.
+    for (const event of events) {
+      const directory = dirname(event.path);
       // Cheap Set lookup first — the steady-state case where the directory is
       // already known must never reach the realpath-aware matcher below.
       if (target.knownDirectories.has(directory) || matchesWatchPath(directory)) {
@@ -1751,12 +1751,10 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       }
       target.knownDirectories.add(directory);
       target.pendingKnownDirectories.add(directory);
-      discovered = true;
-    }
-    if (discovered) {
       this.enforceKnownDirectoriesCap(target);
+      return true;
     }
-    return discovered;
+    return false;
   }
 
   /**

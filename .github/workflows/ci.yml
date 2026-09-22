@@ -205,10 +205,10 @@ jobs:
 
       - name: Run file observation tests
         run: |
-          npx vitest run \
-            packages/server/src/server/file-observer \
-            packages/server/src/server/workspace-git-service.observation.test.ts \
-            packages/server/src/server/workspace-git-service.observation.integration.test.ts \
+          npm run test:unit --workspace=@getpaseo/server -- \
+            src/server/file-observer \
+            src/server/workspace-git-service.observation.test.ts \
+            src/server/workspace-git-service.observation.integration.test.ts \
             --bail=1
 
   desktop-tests-ubuntu:

@@ -2324,15 +2324,7 @@ describe("WorkspaceGitService checkout observation", () => {
     service.dispose();
   });
 
-  test("exceeding the known-directories cap clears the set without breaking subsequent refresh behaviour", async () => {
-    // Regression for the finding that `knownDirectories` is the only
-    // unbounded structure in the watcher. `enforceKnownDirectoriesCap` must
-    // clear the whole set outright once it exceeds
-    // `WORKING_TREE_KNOWN_DIRECTORIES_MAX` (50_000) — proven here by
-    // flooding past the cap with directories unrelated to a previously
-    // established "marker" directory, then showing the marker itself lost
-    // its known status too (only a full clear explains that) and that
-    // discovery/refresh keeps working normally afterward.
+  test("a large event batch refreshes ignored roots without scanning every new directory", async () => {
     const watcher = createWatcherHarness();
     const runGitCommand = vi.fn(async (args: string[]) => ({
       stdout: args[0] === "rev-parse" ? `${REPO_CWD}\n` : "",
@@ -2369,8 +2361,8 @@ describe("WorkspaceGitService checkout observation", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     expect(lsFilesCallCount()).toBe(lsFilesAfterMarker);
 
-    // Flood past the cap with one batch of brand-new directories, none of
-    // them the marker directory.
+    // A single discovery refreshes Git's complete ignored-directory inventory.
+    // The other directories in this batch need not enter the known cache.
     const floodEvents = Array.from({ length: 50_000 }, (_, index) => ({
       path: path.join(REPO_CWD, "gen", `d${index}`, "file.js"),
       type: "create" as const,
@@ -2382,15 +2374,12 @@ describe("WorkspaceGitService checkout observation", () => {
     });
     const lsFilesAfterFlood = lsFilesCallCount();
 
-    // If the cap had not cleared the whole set, the marker directory would
-    // still be known (the flood never touched it) and this write would
-    // trigger nothing. A fresh refresh proves the whole set was wiped, not
-    // selectively trimmed.
+    // The flood must not evict an unrelated known directory by processing
+    // every entry before the cap is checked. Its later edit stays on the
+    // cache fast path and does not trigger a redundant Git refresh.
     checkoutWatcher?.callback(null, [{ path: path.join(markerDir, "file3.js"), type: "create" }]);
     await vi.advanceTimersByTimeAsync(2_000);
-    await vi.waitFor(() => {
-      expect(lsFilesCallCount()).toBeGreaterThan(lsFilesAfterFlood);
-    });
+    expect(lsFilesCallCount()).toBe(lsFilesAfterFlood);
 
     subscription.unsubscribe();
     service.dispose();

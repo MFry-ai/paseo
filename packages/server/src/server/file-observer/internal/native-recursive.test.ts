@@ -365,17 +365,53 @@ test("a recursive-scope reconcile re-links its directory so an ancestor removal 
     notifications.emit("change", "rename", join(root, "a", "b"));
     await settled();
 
-    // Now remove the ancestor "a" outright. Its parent (root) notices "a"
-    // missing from a fresh shallow scan and calls removeSubtree("a", true).
+    // Remove the ancestor while the native event names only a deleted file.
+    // The scoped scan must report its missing directory as well as that file.
     await rm(join(root, "a"), { recursive: true, force: true });
-    notifications.emit("change", "rename", join(root, "a"));
+    notifications.emit("change", "rename", deepFile);
     await settled();
 
     expect(events.filter((event) => event.type === "delete").map((event) => event.path)).toContain(
       deepFile,
     );
+    expect(events).toContainEqual({ type: "delete", path: deepDirectory });
   } finally {
     active = false;
+    await backend.close();
+    await observer.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 15_000);
+
+test("a full native inventory audit reports a removed directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "native-full-audit-"));
+  const directory = join(root, "removed");
+  await mkdir(directory);
+  await writeFile(join(directory, "tracked.txt"), "before");
+  const paths = createObserverPaths(process.platform);
+  const events: FileChange[] = [];
+  const observer = createFileObserver();
+  const backend = createNativeRecursiveBackend(
+    {
+      root,
+      metrics: observer.getDiagnostics(),
+      isActive: () => true,
+      isIgnored: () => false,
+      isPathInside: paths.isInside,
+      queueEvent: (type, path) => events.push({ type, path }),
+      fail: (error) => {
+        throw error;
+      },
+    },
+    paths,
+    () => ({ close: () => {}, on: () => {} }),
+  );
+  try {
+    await backend.start();
+    await rm(directory, { recursive: true, force: true });
+    await backend.updateIgnore(); // Uses the same full inventory diff as the safety audit.
+    expect(events).toContainEqual({ type: "delete", path: directory });
+  } finally {
     await backend.close();
     await observer.close();
     await rm(root, { recursive: true, force: true });

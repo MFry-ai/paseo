@@ -238,7 +238,10 @@ class NativeRecursiveBackend implements ObservationBackend {
       if (fullAudit) {
         const next = await this.scanTree(this.host.root);
         if (!this.canCommit(generation)) return;
-        if (emitDiff) this.queueDiff(next.files, this.files);
+        if (emitDiff) {
+          this.queueDiff(next.files, this.files);
+          this.queueRemovedDirectories(next.directories, this.directories);
+        }
         this.replaceInventory(next);
         this.lastFullAuditAt = performance.now();
         this.host.metrics.fullReconciliationCount += 1;
@@ -423,6 +426,7 @@ class NativeRecursiveBackend implements ObservationBackend {
       for (const file of entry.files) previousFiles.add(file);
     }
     this.queueDiff(inventory.files, previousFiles);
+    this.queueRemovedDirectories(inventory.directories, this.walkSubtree(directory));
     this.removeSubtree(directory, false);
     // removeSubtree unlinks `directory` from its own parent's directories set
     // as part of tearing down the old subtree. Mirror reconcileUnknownSubtree
@@ -441,6 +445,12 @@ class NativeRecursiveBackend implements ObservationBackend {
     }
     for (const path of previousFiles) {
       if (!nextFiles.has(path)) this.host.queueEvent("delete", path);
+    }
+  }
+
+  private queueRemovedDirectories(next: Set<string>, previous: Iterable<string>): void {
+    for (const directory of previous) {
+      if (!next.has(directory)) this.host.queueEvent("delete", directory);
     }
   }
 
@@ -490,6 +500,9 @@ class NativeRecursiveBackend implements ObservationBackend {
           if (!this.files.delete(file)) continue;
           if (emitDeletes) this.host.queueEvent("delete", file);
         }
+        // A native rename can name only a deleted file. The scoped scan still
+        // knows its parent disappeared, so report that topology change too.
+        if (emitDeletes) this.host.queueEvent("delete", directory);
       }
       this.entries.delete(directory);
       this.directories.delete(directory);
