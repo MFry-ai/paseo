@@ -999,8 +999,6 @@ export class OmpAgentSession implements AgentSession {
           return;
         }
       } catch (error) {
-        // The prompt never reached OMP, so no echo will ever claim it.
-        this.forgetClientCorrelation(options?.clientMessageId);
         if (this.activeTurnId !== turnId) {
           return;
         }
@@ -1307,20 +1305,13 @@ export class OmpAgentSession implements AgentSession {
     }
   }
 
-  private forgetClientCorrelation(clientMessageId: string | undefined): void {
-    if (!clientMessageId) {
-      return;
-    }
-    const index = this.pendingClientCorrelations.findIndex(
-      (entry) => entry.clientMessageId === clientMessageId,
-    );
-    if (index !== -1) {
-      this.pendingClientCorrelations.splice(index, 1);
-    }
-  }
-
+  // Paseo runs one foreground turn at a time, so two unclaimed correlations with
+  // the same text mean the older prompt's turn ended without an echo (a failed
+  // or timed-out dispatch). The newest one belongs to the submission OMP is
+  // echoing now; the older one stays queued in case OMP echoes it late, and
+  // falls off the bounded queue otherwise.
   private takeClientCorrelation(text: string): string | null {
-    const index = this.pendingClientCorrelations.findIndex((entry) => entry.text === text);
+    const index = this.pendingClientCorrelations.findLastIndex((entry) => entry.text === text);
     if (index === -1) {
       return null;
     }

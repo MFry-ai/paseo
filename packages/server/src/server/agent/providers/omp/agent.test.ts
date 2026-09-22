@@ -7,13 +7,6 @@ import type { OmpUsagePollScheduler } from "./usage-poller.js";
 import { resolveOmpProviderParams } from "./provider-config.js";
 import { OmpHarness } from "./test-utils/omp-harness.js";
 
-// OMP's RPC events and Paseo's provider-state checks settle on microtasks.
-async function settle(): Promise<void> {
-  for (let index = 0; index < 6; index += 1) {
-    await waitForImmediate();
-  }
-}
-
 test("OMP ready timeout defaults to 20 seconds and RPC timeout overrides both", () => {
   expect(resolveOmpProviderParams({}).runtimeProviderParams).toMatchObject({
     readyTimeoutMs: 20_000,
@@ -663,25 +656,24 @@ describe("OMP agent client and session", () => {
     runtime.beginTurn();
     runtime.acceptPrompt("first prompt", "omp-user-a");
     runtime.streamAssistantText("working on it", "omp-assistant-a");
-    await settle();
+    await omp.waitForUserMessages(1);
 
     // OMP takes no steer, so Paseo interrupts and replaces the foreground turn.
     await omp.interrupt();
     await omp.requireStartTurnFromClient("second prompt", "client-b");
     runtime.beginTurn();
-    await settle();
 
     // OMP flushes the aborted turn's terminal event after the replacement started.
     runtime.emit({
       type: "agent_end",
       messages: [{ role: "assistant", content: [], responseId: "omp-assistant-a" }],
     });
-    await settle();
+    await omp.waitForEvent("turn_completed");
 
     runtime.acceptPrompt("second prompt", "omp-user-b");
     runtime.streamAssistantText("second answer", "omp-assistant-b");
     runtime.finishTurn();
-    await settle();
+    await omp.waitForUserMessages(2);
 
     expect(omp.timeline().filter((item) => item.type === "user_message")).toEqual([
       {
@@ -710,12 +702,12 @@ describe("OMP agent client and session", () => {
       type: "message_end",
       message: { role: "custom", content: "xd://inventory", display: false },
     });
-    await settle();
+    await omp.waitForEvent("turn_completed");
 
     runtime.acceptPrompt("do the thing", "omp-user-a");
     runtime.streamAssistantText("done", "omp-assistant-a");
     runtime.finishTurn();
-    await settle();
+    await omp.waitForUserMessages(1);
 
     expect(omp.timeline().filter((item) => item.type === "user_message")).toEqual([
       {
@@ -737,7 +729,7 @@ describe("OMP agent client and session", () => {
     runtime.acceptPrompt("again", "omp-user-a");
     runtime.streamAssistantText("first answer", "omp-assistant-a");
     runtime.finishTurn();
-    await settle();
+    await omp.waitForUserMessages(1);
 
     await omp.requireStartTurnFromClient("again", "client-b");
     runtime.beginTurn();
@@ -746,11 +738,39 @@ describe("OMP agent client and session", () => {
     runtime.acceptPrompt("again", "omp-user-b");
     runtime.streamAssistantText("second answer", "omp-assistant-b");
     runtime.finishTurn();
-    await settle();
+    await omp.waitForUserMessages(2);
 
     expect(omp.timeline().filter((item) => item.type === "user_message")).toEqual([
       { type: "user_message", text: "again", messageId: "omp-user-a", clientMessageId: "client-a" },
       { type: "user_message", text: "again", messageId: "omp-user-b", clientMessageId: "client-b" },
+    ]);
+  });
+
+  test("a prompt OMP echoes after its dispatch failed keeps its client correlation", async () => {
+    const omp = new OmpHarness();
+    await omp.start();
+
+    const runtime = omp.runtime();
+    // The prompt reached OMP, but Paseo's request failed before it was answered.
+    runtime.promptError = new Error("OMP prompt request timed out");
+    await omp.requireStartTurnFromClient("slow prompt", "client-a");
+    await omp.waitForEvent("turn_failed");
+    runtime.promptError = null;
+
+    // OMP accepted it anyway and echoes it once it gets to the turn.
+    runtime.beginTurn();
+    runtime.acceptPrompt("slow prompt", "omp-user-a");
+    runtime.streamAssistantText("late answer", "omp-assistant-a");
+    runtime.finishTurn();
+    await omp.waitForUserMessages(1);
+
+    expect(omp.timeline().filter((item) => item.type === "user_message")).toEqual([
+      {
+        type: "user_message",
+        text: "slow prompt",
+        messageId: "omp-user-a",
+        clientMessageId: "client-a",
+      },
     ]);
   });
 
@@ -761,8 +781,7 @@ describe("OMP agent client and session", () => {
     const runtime = omp.runtime();
     runtime.promptError = new Error("OMP prompt dispatch failed");
     await omp.requireStartTurnFromClient("retry me", "client-a");
-    await settle();
-    expect(omp.eventTypes()).toContain("turn_failed");
+    await omp.waitForEvent("turn_failed");
     runtime.promptError = null;
 
     await omp.requireStartTurnFromClient("retry me", "client-b");
@@ -770,7 +789,7 @@ describe("OMP agent client and session", () => {
     runtime.acceptPrompt("retry me", "omp-user-b");
     runtime.streamAssistantText("done", "omp-assistant-b");
     runtime.finishTurn();
-    await settle();
+    await omp.waitForUserMessages(1);
 
     expect(omp.timeline().filter((item) => item.type === "user_message")).toEqual([
       {
@@ -792,14 +811,14 @@ describe("OMP agent client and session", () => {
     runtime.acceptPrompt("again", "omp-user-a");
     runtime.streamAssistantText("first answer", "omp-assistant-a");
     runtime.finishTurn();
-    await settle();
+    await omp.waitForUserMessages(1);
 
     await omp.requireStartTurnFromClient("again", "client-b");
     runtime.beginTurn();
     runtime.acceptPrompt("again", "omp-user-b");
     runtime.streamAssistantText("second answer", "omp-assistant-b");
     runtime.finishTurn();
-    await settle();
+    await omp.waitForUserMessages(2);
 
     expect(omp.timeline().filter((item) => item.type === "user_message")).toEqual([
       { type: "user_message", text: "again", messageId: "omp-user-a", clientMessageId: "client-a" },
