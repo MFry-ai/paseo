@@ -754,6 +754,34 @@ describe("OMP agent client and session", () => {
     ]);
   });
 
+  test("a prompt that never reaches OMP leaves no correlation for a later submission", async () => {
+    const omp = new OmpHarness();
+    await omp.start();
+
+    const runtime = omp.runtime();
+    runtime.promptError = new Error("OMP prompt dispatch failed");
+    await omp.requireStartTurnFromClient("retry me", "client-a");
+    await settle();
+    expect(omp.eventTypes()).toContain("turn_failed");
+    runtime.promptError = null;
+
+    await omp.requireStartTurnFromClient("retry me", "client-b");
+    runtime.beginTurn();
+    runtime.acceptPrompt("retry me", "omp-user-b");
+    runtime.streamAssistantText("done", "omp-assistant-b");
+    runtime.finishTurn();
+    await settle();
+
+    expect(omp.timeline().filter((item) => item.type === "user_message")).toEqual([
+      {
+        type: "user_message",
+        text: "retry me",
+        messageId: "omp-user-b",
+        clientMessageId: "client-b",
+      },
+    ]);
+  });
+
   test("the same prompt text on two turns correlates to its own submission", async () => {
     const omp = new OmpHarness();
     await omp.start();

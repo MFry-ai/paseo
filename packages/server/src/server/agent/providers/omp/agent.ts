@@ -999,6 +999,8 @@ export class OmpAgentSession implements AgentSession {
           return;
         }
       } catch (error) {
+        // The prompt never reached OMP, so no echo will ever claim it.
+        this.forgetClientCorrelation(options?.clientMessageId);
         if (this.activeTurnId !== turnId) {
           return;
         }
@@ -1302,6 +1304,18 @@ export class OmpAgentSession implements AgentSession {
     // mid-turn). Keep the queue bounded so those cannot accumulate.
     if (this.pendingClientCorrelations.length > MAX_PENDING_CLIENT_CORRELATIONS) {
       this.pendingClientCorrelations.shift();
+    }
+  }
+
+  private forgetClientCorrelation(clientMessageId: string | undefined): void {
+    if (!clientMessageId) {
+      return;
+    }
+    const index = this.pendingClientCorrelations.findIndex(
+      (entry) => entry.clientMessageId === clientMessageId,
+    );
+    if (index !== -1) {
+      this.pendingClientCorrelations.splice(index, 1);
     }
   }
 
