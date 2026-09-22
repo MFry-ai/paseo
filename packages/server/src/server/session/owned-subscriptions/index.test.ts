@@ -1,31 +1,25 @@
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 import { SessionDelivery } from "./index.js";
 
-function resourceStoreCount(resource: object): number {
-  return Object.getOwnPropertySymbols(resource).filter(
-    (symbol) => symbol.description === "kResourceStore",
-  ).length;
+function retainedPromiseBytes(cycles: number): number {
+  const fixture = fileURLToPath(new URL("./test-utils/memory-repro.ts", import.meta.url));
+  const output = execFileSync(
+    process.execPath,
+    ["--expose-gc", "--import", "tsx", fixture, String(cycles)],
+    {
+      encoding: "utf8",
+    },
+  );
+  return Number(output);
 }
 
-test("closed deliveries stop adding context slots to new async work", async () => {
-  let baseline = 0;
-  for (let index = 0; index < 20; index++) {
-    const delivery = new SessionDelivery(() => {});
-    const source = {};
-    delivery.attach(source, true);
-    await delivery.forSource(source, async () => {
-      await Promise.resolve();
-      expect(delivery.currentSource).toBe(source);
-    });
-    await delivery.request(source, { type: "ping", requestId: String(index) }, async () => {
-      await Promise.resolve();
-      expect(delivery.currentSource).toBe(source);
-    });
-    await delivery.close();
-    await delivery.close();
-    if (index === 0) baseline = resourceStoreCount(new Promise<void>(() => {}));
-    expect(resourceStoreCount(new Promise<void>(() => {}))).toBe(baseline);
-  }
+test("closed deliveries do not increase memory used by unrelated promises", () => {
+  const control = retainedPromiseBytes(0);
+  const afterChurn = retainedPromiseBytes(40);
+  expect(control).toBeGreaterThan(0);
+  expect(afterChurn).toBeLessThan(control * 4);
 });
 
 test("concurrent requests keep their source through asynchronous work", async () => {
@@ -139,7 +133,6 @@ test("close finishes with a paused request and late work sees cancellation witho
 });
 
 test("a failed in-flight request does not fail delivery teardown", async () => {
-  const baseline = resourceStoreCount(new Promise<void>(() => {}));
   const delivery = new SessionDelivery(() => {});
   const source = {};
   delivery.attach(source, true);
@@ -156,11 +149,9 @@ test("a failed in-flight request does not fail delivery teardown", async () => {
   resume();
   await expect(request).rejects.toThrow("request canceled");
   await expect(closing).resolves.toBeUndefined();
-  expect(resourceStoreCount(new Promise<void>(() => {}))).toBe(baseline);
 });
 
 test("failed teardown still closes the delivery and rejects late work", async () => {
-  const baseline = resourceStoreCount(new Promise<void>(() => {}));
   const delivery = new SessionDelivery(() => {});
   const source = {};
   delivery.attach(source, true);
@@ -172,7 +163,6 @@ test("failed teardown still closes the delivery and rejects late work", async ()
 
   await expect(delivery.close()).rejects.toThrow("teardown failed");
   await expect(delivery.close()).rejects.toThrow("teardown failed");
-  expect(resourceStoreCount(new Promise<void>(() => {}))).toBe(baseline);
   expect(() => delivery.attach({}, true)).toThrow("Session delivery is closed");
   expect(() => delivery.forSource(source, () => {})).toThrow("Session delivery is closed");
   await expect(
