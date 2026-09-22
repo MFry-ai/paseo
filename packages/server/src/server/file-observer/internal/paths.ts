@@ -1,4 +1,4 @@
-import { resolve, sep } from "node:path";
+import { posix, win32 } from "node:path";
 
 export interface ObserverPaths {
   isInside(root: string, path: string): boolean;
@@ -8,6 +8,8 @@ export interface ObserverPaths {
 }
 
 export function createObserverPaths(platform: NodeJS.Platform): ObserverPaths {
+  const pathApi = platform === "win32" ? win32 : posix;
+
   function comparable(path: string): string {
     return platform === "win32" ? path.toLowerCase() : path;
   }
@@ -15,7 +17,9 @@ export function createObserverPaths(platform: NodeJS.Platform): ObserverPaths {
   function isInside(root: string, path: string): boolean {
     const comparedRoot = comparable(root);
     const comparedPath = comparable(path);
-    return comparedPath === comparedRoot || comparedPath.startsWith(`${comparedRoot}${sep}`);
+    return (
+      comparedPath === comparedRoot || comparedPath.startsWith(`${comparedRoot}${pathApi.sep}`)
+    );
   }
 
   function collapse(paths: string[]): string[] {
@@ -27,7 +31,7 @@ export function createObserverPaths(platform: NodeJS.Platform): ObserverPaths {
     // holds and one backward look is enough.
     const decorated = [...new Set(paths)].map((path) => ({
       path,
-      key: comparable(path).split(sep).join("\0"),
+      key: comparable(path).split(pathApi.sep).join("\0"),
     }));
     decorated.sort((left, right) => {
       if (left.key < right.key) return -1;
@@ -48,7 +52,7 @@ export function createObserverPaths(platform: NodeJS.Platform): ObserverPaths {
     collapse,
     normalizeIgnoredRoots(root, paths) {
       const inside = paths
-        .map((path) => resolve(path))
+        .map((path) => pathApi.resolve(path))
         .filter((path) => path !== root && isInside(root, path));
       return collapse(inside);
     },

@@ -1,4 +1,4 @@
-import { sep } from "node:path";
+import { win32 } from "node:path";
 import { describe, expect, test } from "vitest";
 import { createObserverPaths } from "./paths.js";
 
@@ -28,14 +28,11 @@ describe("collapse", () => {
     expect(paths.collapse([aChild, b, a]).sort()).toEqual([a, b].sort());
   });
 
-  // `createObserverPaths`'s `platform` argument only controls comparable()'s
-  // case-folding -- `sep` comes from a top-level `node:path` import, fixed
-  // to the host OS regardless of `platform`. This exercises the win32
-  // case-insensitive half specifically (mismatched drive-letter and file
-  // name casing), using the host's own separator; it cannot exercise
-  // backslash-separated paths without actually running on Windows.
+  // The selected path strategy supplies separators and case comparison, so
+  // Windows paths can be checked on every CI host.
   test("collapses win32 paths case-insensitively even with mismatched casing", () => {
     const paths = createObserverPaths("win32");
+    const sep = win32.sep;
     const parent = `C:${sep}repo${sep}packages${sep}app`;
     const sibling = `C:${sep}repo${sep}packages${sep}APP-web`;
     const descendant = `c:${sep}repo${sep}packages${sep}app${sep}src`;

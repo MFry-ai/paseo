@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { LRUCache } from "lru-cache";
 import { CheckoutDiffCache } from "./checkout-diff-cache.js";
 import pLimit from "p-limit";
@@ -1861,16 +1861,18 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       return;
     }
     const foldCase = looksLikeDefiniteWindowsPath(target.watchPath);
+    const comparable = (path: string) =>
+      foldCase ? path.replaceAll("\\", "/").toLowerCase() : path;
     const ignoredPrefixes: string[] = [];
     const foldedIgnoredExact = foldCase ? new Set<string>() : null;
     for (const ignoredDirectory of target.ignoredDirectories) {
-      const prefix = `${ignoredDirectory}${sep}`;
-      ignoredPrefixes.push(foldCase ? prefix.toLowerCase() : prefix);
-      foldedIgnoredExact?.add(ignoredDirectory.toLowerCase());
+      const ignored = comparable(ignoredDirectory);
+      ignoredPrefixes.push(`${ignored}/`);
+      foldedIgnoredExact?.add(ignored);
     }
     for (const directory of target.knownDirectories) {
-      const comparableDirectory = foldCase ? directory.toLowerCase() : directory;
-      const comparableDirectoryWithSep = `${comparableDirectory}${sep}`;
+      const comparableDirectory = comparable(directory);
+      const comparableDirectoryWithSep = `${comparableDirectory}/`;
       const isIgnored =
         (foldedIgnoredExact ?? target.ignoredDirectories).has(comparableDirectory) ||
         ignoredPrefixes.some((prefix) => comparableDirectoryWithSep.startsWith(prefix));
