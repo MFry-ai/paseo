@@ -466,6 +466,12 @@ export class OmpHarness {
     await promptStarted;
   }
 
+  async requireStartTurnFromClient(message: string, clientMessageId: string): Promise<void> {
+    const promptStarted = this.omp.latestSession().nextPrompt();
+    await this.requireSession().startTurn(message, { clientMessageId });
+    await promptStarted;
+  }
+
   async interrupt(): Promise<void> {
     await this.requireSession().interrupt();
   }

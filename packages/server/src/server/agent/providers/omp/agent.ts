@@ -322,6 +322,9 @@ function renderTextOnlyImageHint(image: { data: string; mimeType: string }): str
   }
 }
 
+// Bounds the dispatched prompts whose client correlation is still unclaimed.
+const MAX_PENDING_CLIENT_CORRELATIONS = 16;
+
 function convertPromptInput(
   prompt: AgentPromptInput,
   options: { model: OmpModel | null | undefined },
@@ -850,7 +853,12 @@ export class OmpAgentSession implements AgentSession {
   private activeAskUserDialog: ActiveAskUserDialog | null = null;
   private pendingCombinedAskUserResponse: PendingCombinedAskUserResponse | null = null;
   private activeTurnId: string | null = null;
-  private activeClientMessageId: string | null = null;
+  // A dispatched prompt owns its client correlation, not the turn that carried
+  // it: OMP echoes the prompt as a user message that can land after Paseo has
+  // already completed the turn (a replacement turn, or a turn completed by a
+  // custom message). Correlations are consumed by the echo they belong to, so
+  // the same text submitted on different turns stays separate.
+  private readonly pendingClientCorrelations: Array<{ text: string; clientMessageId: string }> = [];
   private activeAssistantMessageId: string | null = null;
   private activeTurnTerminalAssistantMessage: OmpAgentMessage | null = null;
   private activeTurnStarted = false;
@@ -957,9 +965,11 @@ export class OmpAgentSession implements AgentSession {
 
     const payload = convertPromptInput(prompt, { model: this.state.model });
     const turnId = randomUUID();
+    if (options?.clientMessageId) {
+      this.rememberClientCorrelation(payload.text, options.clientMessageId);
+    }
     this.live = true;
     this.activeTurnId = turnId;
-    this.activeClientMessageId = options?.clientMessageId ?? null;
     this.activeAssistantMessageId = null;
     this.activeTurnTerminalAssistantMessage = null;
     this.activeTurnStarted = false;
@@ -994,7 +1004,6 @@ export class OmpAgentSession implements AgentSession {
         }
         this.usagePoller.stopTurn();
         this.activeTurnId = null;
-        this.activeClientMessageId = null;
         this.activeTurnStarted = false;
         this.activeTurnHasUserMessage = false;
         this.activeAssistantMessageId = null;
@@ -1127,7 +1136,6 @@ export class OmpAgentSession implements AgentSession {
       this.terminalizeActiveWork();
       this.usagePoller.stopTurn();
       this.activeTurnId = null;
-      this.activeClientMessageId = null;
       this.activeTurnStarted = false;
       this.activeTurnHasUserMessage = false;
       this.activeAssistantMessageId = null;
@@ -1288,6 +1296,24 @@ export class OmpAgentSession implements AgentSession {
     return this.activeTurnId ?? undefined;
   }
 
+  private rememberClientCorrelation(text: string, clientMessageId: string): void {
+    this.pendingClientCorrelations.push({ text, clientMessageId });
+    // OMP never echoes some prompts (a local-only command, a session that dies
+    // mid-turn). Keep the queue bounded so those cannot accumulate.
+    if (this.pendingClientCorrelations.length > MAX_PENDING_CLIENT_CORRELATIONS) {
+      this.pendingClientCorrelations.shift();
+    }
+  }
+
+  private takeClientCorrelation(text: string): string | null {
+    const index = this.pendingClientCorrelations.findIndex((entry) => entry.text === text);
+    if (index === -1) {
+      return null;
+    }
+    const [entry] = this.pendingClientCorrelations.splice(index, 1);
+    return entry?.clientMessageId ?? null;
+  }
+
   private scheduleNoTurnPromptCompletion(turnId: string): void {
     this.cancelNoTurnPromptCompletion();
     const abort = new AbortController();
@@ -1341,6 +1367,7 @@ export class OmpAgentSession implements AgentSession {
     const outputs = this.pendingNoTurnOutputs.filter((output) => output.turnId === turnId);
     this.clearNoTurnBuffers();
     if (promptText) {
+      const clientMessageId = this.takeClientCorrelation(promptText);
       this.emit({
         type: "timeline",
         provider: this.provider,
@@ -1348,7 +1375,7 @@ export class OmpAgentSession implements AgentSession {
         item: {
           type: "user_message",
           text: promptText,
-          ...(this.activeClientMessageId ? { clientMessageId: this.activeClientMessageId } : {}),
+          ...(clientMessageId ? { clientMessageId } : {}),
         },
       });
     }
@@ -1786,7 +1813,6 @@ export class OmpAgentSession implements AgentSession {
     }
     const turnId = this.activeTurnId;
     this.activeTurnId = null;
-    this.activeClientMessageId = null;
     this.activeTurnStarted = false;
     this.activeTurnHasUserMessage = false;
     this.activeTurnTerminalAssistantMessage = null;
@@ -2043,7 +2069,6 @@ export class OmpAgentSession implements AgentSession {
     }
     const nativeMessage = event.message as OmpAgentMessage & { id?: unknown; entryId?: unknown };
     const messageId = readNativeMessageId(nativeMessage);
-    const clientMessageId = this.activeClientMessageId;
     const emitUserMessage = (resolvedMessageId?: string): void => {
       if (resolvedMessageId) {
         // OMP re-emits user message_end frames for entries it has already
@@ -2054,6 +2079,9 @@ export class OmpAgentSession implements AgentSession {
         }
         this.emittedUserMessageIds.add(resolvedMessageId);
       }
+      // Claimed only once a row is really emitted, so a re-emitted frame cannot
+      // consume the correlation of a later submission with the same text.
+      const clientMessageId = this.takeClientCorrelation(text);
       this.emit({
         type: "timeline",
         provider: this.provider,
@@ -2127,7 +2155,6 @@ export class OmpAgentSession implements AgentSession {
 
   private completeTurn(turnId: string | undefined, messages: OmpAgentMessage[]): void {
     this.activeTurnId = null;
-    this.activeClientMessageId = null;
     this.activeAssistantMessageId = null;
     this.activeTurnTerminalAssistantMessage = null;
     this.activeTurnStarted = false;
