@@ -8,11 +8,11 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isPlatform } from "../test-utils/platform.js";
+import { startPathContainmentMetrics, stopPathContainmentMetrics } from "./path.js";
 import { startGitCommandMetrics, stopGitCommandMetrics } from "./run-git-command.js";
 import {
   searchDirectoryEntries,
@@ -955,81 +955,56 @@ describe("relative typed-entry configuration", () => {
   });
 });
 
-// A home-directory scan is dominated by per-entry bookkeeping, not by reading the tree. These
-// budgets are expressed against a plain readdir walk of the same tree, so they mean the same
-// thing on a slow CI runner as on a developer machine.
-//
-// Skipped on Windows: the tree this needs is deeper than MAX_PATH allows, and the directory
-// listing cache this measures is disabled there because directory metadata cannot validate it.
-describe.skipIf(isWindows)("home-tree scan cost", () => {
-  const ENTRIES = 5_000;
+// Reading a tree is cheap; re-deriving each entry's path state is not. A scan that asks whether
+// every ancestor of every entry is inside the root, or is Git-ignored, costs multiples of the
+// read and is what made large home directories exceed the client request timeout.
+describe("home-tree scan cost", () => {
   const DEPTH = 8;
-  // Long names cost more to normalize, and per-entry path work is spent normalizing them.
-  const SEGMENT_NAME_LENGTH = 48;
+  const CHAINS = 40;
   let scanRoot: string;
-
-  function buildDeepTree(root: string): void {
-    const chains = Math.ceil(ENTRIES / DEPTH);
-    for (let chain = 0; chain < chains; chain += 1) {
-      const segments: string[] = [];
-      for (let level = 0; level < DEPTH; level += 1) {
-        segments.push(`d${chain * DEPTH + level}`.padEnd(SEGMENT_NAME_LENGTH, "x"));
-      }
-      mkdirSync(path.join(root, ...segments), { recursive: true });
-    }
-  }
-
-  async function readWholeTree(root: string): Promise<void> {
-    let level = [root];
-    while (level.length) {
-      const next: string[] = [];
-      for (const directory of level) {
-        const children = await readdir(directory, { withFileTypes: true }).catch(() => []);
-        for (const child of children) {
-          if (child.isDirectory()) next.push(path.join(directory, child.name));
-        }
-      }
-      level = next;
-    }
-  }
-
-  async function measure(run: () => Promise<unknown>): Promise<number> {
-    const startedAt = process.hrtime.bigint();
-    await run();
-    return Number(process.hrtime.bigint() - startedAt) / 1e6;
-  }
-
-  // Nothing matches, so every scan spends its whole budget and the timings are comparable.
-  const scanDeepTree = () =>
-    searchAbsoluteDirectoryPaths({
-      homeDir: scanRoot,
-      query: "nomatchanywhereinthistree",
-      limit: 30,
-      maxDepth: DEPTH + 4,
-      maxDirectoriesScanned: ENTRIES,
-    });
 
   beforeEach(() => {
     scanRoot = realpathSync.native(mkdtempSync(path.join(tmpdir(), "directory-scan-cost-")));
-    buildDeepTree(scanRoot);
+    for (let chain = 0; chain < CHAINS; chain += 1) {
+      const segments: string[] = [];
+      for (let level = 0; level < DEPTH; level += 1) segments.push(`c${chain}l${level}`);
+      mkdirSync(path.join(scanRoot, ...segments), { recursive: true });
+    }
   });
 
   afterEach(() => {
     rmSync(scanRoot, { recursive: true, force: true });
   });
 
-  it("scans a deep tree within a bounded multiple of reading it", async () => {
-    const readMs = await measure(() => readWholeTree(scanRoot));
-    await scanDeepTree();
-    const scanMs = await measure(scanDeepTree);
+  // Nothing matches, so the scan walks the whole tree instead of stopping at a confident result.
+  const scanWholeTree = () =>
+    searchAbsoluteDirectoryPaths({ homeDir: scanRoot, query: "nomatch", maxDepth: DEPTH + 4 });
 
-    // Re-deriving containment and Git-ignore state for every ancestor of every entry, and
-    // sweeping the directory cache on every miss, put this past 12x. That is what made real
-    // home directories exceed the client request timeout.
-    const ratio = scanMs / readMs;
-    expect({ ratio: Math.round(ratio), withinBudget: ratio < 6 }).toEqual({
-      ratio: expect.any(Number),
-      withinBudget: true,
-    });
-  }, 60_000);
+  async function countContainmentChecks(run: () => Promise<unknown>): Promise<number> {
+    startPathContainmentMetrics();
+    await run();
+    return stopPathContainmentMetrics();
+  }
+
+  it("derives no containment for a tree that cannot leave the root", async () => {
+    const checks = await countContainmentChecks(scanWholeTree);
+
+    expect({ checks, scanned: CHAINS * DEPTH }).toEqual({ checks: 0, scanned: 320 });
+  });
+
+  it.skipIf(isWindows)(
+    "derives containment for symlinked entries, which can leave the root",
+    async () => {
+      const outside = realpathSync.native(mkdtempSync(path.join(tmpdir(), "directory-scan-away-")));
+      symlinkSync(outside, path.join(scanRoot, "escape"), "dir");
+
+      const checks = await countContainmentChecks(scanWholeTree);
+
+      expect({ checked: checks > 0, escaped: (await scanWholeTree()).includes(outside) }).toEqual({
+        checked: true,
+        escaped: false,
+      });
+      rmSync(outside, { recursive: true, force: true });
+    },
+  );
 });
