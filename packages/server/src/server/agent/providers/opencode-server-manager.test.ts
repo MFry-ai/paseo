@@ -113,6 +113,21 @@ describe("OpenCodeServerManager generations", () => {
     expect(runtime.terminatedPorts).toEqual([5101]);
   });
 
+  test("getInstance isolates identical runtime settings across server scopes", async () => {
+    const logger = createTestLogger();
+    const scopeA = {};
+    const scopeB = {};
+    const settings = { command: "opencode-scoped" };
+
+    const managerA = OpenCodeServerManager.getInstance(logger, settings, {}, scopeA);
+    const managerB = OpenCodeServerManager.getInstance(logger, settings, {}, scopeB);
+
+    expect(managerA).not.toBe(managerB);
+    expect(OpenCodeServerManager.getInstance(logger, settings, {}, scopeA)).toBe(managerA);
+    await managerA.shutdown();
+    await managerB.shutdown();
+  });
+
   test("logs generation lifecycle transitions", async () => {
     const { logger, records } = createCapturingLogger();
     const { manager } = createTestManager([4081, 4082], { logger });

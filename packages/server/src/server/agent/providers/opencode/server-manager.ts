@@ -77,7 +77,7 @@ export interface OpenCodeServerManagerOptions {
 }
 
 export class OpenCodeServerManager implements OpenCodeServerManagerLike {
-  private static instances = new Map<string, OpenCodeServerManager>();
+  private static instances = new Map<object | undefined, Map<string, OpenCodeServerManager>>();
   private static exitHandlerRegistered = false;
   private currentServer: OpenCodeServerGeneration | null = null;
   private retiredServers = new Set<OpenCodeServerGeneration>();
@@ -116,9 +116,13 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     logger: Logger,
     runtimeSettings?: ProviderRuntimeSettings,
     options: Omit<OpenCodeServerManagerOptions, "logger" | "runtimeSettings"> = {},
+    scope?: object,
   ): OpenCodeServerManager {
+    // A bridge/registry belongs to one daemon runtime; equal provider settings in another
+    // runtime must not reuse its server, event source, or managed-process ownership.
     const settingsKey = JSON.stringify(runtimeSettings ?? {});
-    const existing = OpenCodeServerManager.instances.get(settingsKey);
+    const scopedInstances = OpenCodeServerManager.instances.get(scope);
+    const existing = scopedInstances?.get(settingsKey);
     if (existing) {
       return existing;
     }
@@ -127,7 +131,11 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
       runtimeSettings,
       ...options,
     });
-    OpenCodeServerManager.instances.set(settingsKey, manager);
+    if (scopedInstances) {
+      scopedInstances.set(settingsKey, manager);
+    } else {
+      OpenCodeServerManager.instances.set(scope, new Map([[settingsKey, manager]]));
+    }
     OpenCodeServerManager.registerExitHandler();
     return manager;
   }
@@ -139,8 +147,10 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     OpenCodeServerManager.exitHandlerRegistered = true;
 
     const cleanup = () => {
-      for (const instance of OpenCodeServerManager.instances.values()) {
-        void instance.shutdown();
+      for (const scopedInstances of OpenCodeServerManager.instances.values()) {
+        for (const instance of scopedInstances.values()) {
+          void instance.shutdown();
+        }
       }
     };
 
