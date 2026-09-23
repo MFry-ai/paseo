@@ -34,29 +34,25 @@ describe("OpenCodeServerManager generations", () => {
     const runtimeB = new FakeOpenCodeServerRuntime([5011, 5012], { autoAnnounce: true });
     const logger = createTestLogger();
 
-    const managerA = OpenCodeServerManager.getInstance(
+    const managerA = OpenCodeServerManager.getInstance({
       logger,
-      { command: "opencode-a" },
-      {
-        managedProcesses: runtimeA.managedProcesses,
-        portAllocator: runtimeA.allocatePort,
-        resolveCommandPrefix: runtimeA.resolveCommandPrefix,
-        spawnServerProcess: runtimeA.spawnServerProcess,
-        terminateProcess: runtimeA.terminateProcess,
-      },
-    );
+      runtimeSettings: { command: "opencode-a" },
+      managedProcesses: runtimeA.managedProcesses,
+      portAllocator: runtimeA.allocatePort,
+      resolveCommandPrefix: runtimeA.resolveCommandPrefix,
+      spawnServerProcess: runtimeA.spawnServerProcess,
+      terminateProcess: runtimeA.terminateProcess,
+    });
 
-    const managerB = OpenCodeServerManager.getInstance(
+    const managerB = OpenCodeServerManager.getInstance({
       logger,
-      { command: "opencode-b" },
-      {
-        managedProcesses: runtimeB.managedProcesses,
-        portAllocator: runtimeB.allocatePort,
-        resolveCommandPrefix: runtimeB.resolveCommandPrefix,
-        spawnServerProcess: runtimeB.spawnServerProcess,
-        terminateProcess: runtimeB.terminateProcess,
-      },
-    );
+      runtimeSettings: { command: "opencode-b" },
+      managedProcesses: runtimeB.managedProcesses,
+      portAllocator: runtimeB.allocatePort,
+      resolveCommandPrefix: runtimeB.resolveCommandPrefix,
+      spawnServerProcess: runtimeB.spawnServerProcess,
+      terminateProcess: runtimeB.terminateProcess,
+    });
 
     expect(managerA).not.toBe(managerB);
 
@@ -80,29 +76,25 @@ describe("OpenCodeServerManager generations", () => {
     const runtime = new FakeOpenCodeServerRuntime([5101], { autoAnnounce: true });
     const logger = createTestLogger();
 
-    const manager1 = OpenCodeServerManager.getInstance(
+    const manager1 = OpenCodeServerManager.getInstance({
       logger,
-      { command: "opencode-same" },
-      {
-        managedProcesses: runtime.managedProcesses,
-        portAllocator: runtime.allocatePort,
-        resolveCommandPrefix: runtime.resolveCommandPrefix,
-        spawnServerProcess: runtime.spawnServerProcess,
-        terminateProcess: runtime.terminateProcess,
-      },
-    );
+      runtimeSettings: { command: "opencode-same" },
+      managedProcesses: runtime.managedProcesses,
+      portAllocator: runtime.allocatePort,
+      resolveCommandPrefix: runtime.resolveCommandPrefix,
+      spawnServerProcess: runtime.spawnServerProcess,
+      terminateProcess: runtime.terminateProcess,
+    });
 
-    const manager2 = OpenCodeServerManager.getInstance(
+    const manager2 = OpenCodeServerManager.getInstance({
       logger,
-      { command: "opencode-same" },
-      {
-        managedProcesses: runtime.managedProcesses,
-        portAllocator: runtime.allocatePort,
-        resolveCommandPrefix: runtime.resolveCommandPrefix,
-        spawnServerProcess: runtime.spawnServerProcess,
-        terminateProcess: runtime.terminateProcess,
-      },
-    );
+      runtimeSettings: { command: "opencode-same" },
+      managedProcesses: runtime.managedProcesses,
+      portAllocator: runtime.allocatePort,
+      resolveCommandPrefix: runtime.resolveCommandPrefix,
+      spawnServerProcess: runtime.spawnServerProcess,
+      terminateProcess: runtime.terminateProcess,
+    });
 
     expect(manager1).toBe(manager2);
 
@@ -119,13 +111,38 @@ describe("OpenCodeServerManager generations", () => {
     const scopeB = {};
     const settings = { command: "opencode-scoped" };
 
-    const managerA = OpenCodeServerManager.getInstance(logger, settings, {}, scopeA);
-    const managerB = OpenCodeServerManager.getInstance(logger, settings, {}, scopeB);
+    const managerA = OpenCodeServerManager.getInstance({
+      logger,
+      runtimeSettings: settings,
+      scope: scopeA,
+    });
+    const managerB = OpenCodeServerManager.getInstance({
+      logger,
+      runtimeSettings: settings,
+      scope: scopeB,
+    });
 
     expect(managerA).not.toBe(managerB);
-    expect(OpenCodeServerManager.getInstance(logger, settings, {}, scopeA)).toBe(managerA);
+    expect(
+      OpenCodeServerManager.getInstance({ logger, runtimeSettings: settings, scope: scopeA }),
+    ).toBe(managerA);
     await managerA.shutdown();
     await managerB.shutdown();
+  });
+
+  test("getInstance shares a manager when environment entries have different insertion order", async () => {
+    const logger = createTestLogger();
+    const first = OpenCodeServerManager.getInstance({
+      logger,
+      runtimeSettings: { env: { Z_KEY: "last", A_KEY: "first" } },
+    });
+    const second = OpenCodeServerManager.getInstance({
+      logger,
+      runtimeSettings: { env: { A_KEY: "first", Z_KEY: "last" } },
+    });
+
+    expect(second).toBe(first);
+    await first.shutdown();
   });
 
   test("logs generation lifecycle transitions", async () => {

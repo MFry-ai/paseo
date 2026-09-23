@@ -76,6 +76,23 @@ export interface OpenCodeServerManagerOptions {
   decorateServerEnv?: (env: Record<string, string>) => Record<string, string>;
 }
 
+export interface OpenCodeServerManagerInstanceOptions extends OpenCodeServerManagerOptions {
+  scope?: object;
+}
+
+function stableSettingsKey(settings: ProviderRuntimeSettings | undefined): string {
+  return JSON.stringify(settings ?? {}, (_key, value: unknown) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+    return Object.fromEntries(
+      Object.entries(value).sort(([left], [right]) => {
+        if (left < right) return -1;
+        if (left > right) return 1;
+        return 0;
+      }),
+    );
+  });
+}
+
 export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   private static instances = new Map<object | undefined, Map<string, OpenCodeServerManager>>();
   private static exitHandlerRegistered = false;
@@ -112,25 +129,17 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     this.decorateServerEnv = options.decorateServerEnv;
   }
 
-  static getInstance(
-    logger: Logger,
-    runtimeSettings?: ProviderRuntimeSettings,
-    options: Omit<OpenCodeServerManagerOptions, "logger" | "runtimeSettings"> = {},
-    scope?: object,
-  ): OpenCodeServerManager {
+  static getInstance(options: OpenCodeServerManagerInstanceOptions): OpenCodeServerManager {
     // A bridge/registry belongs to one daemon runtime; equal provider settings in another
     // runtime must not reuse its server, event source, or managed-process ownership.
-    const settingsKey = JSON.stringify(runtimeSettings ?? {});
+    const { scope, ...managerOptions } = options;
+    const settingsKey = stableSettingsKey(options.runtimeSettings);
     const scopedInstances = OpenCodeServerManager.instances.get(scope);
     const existing = scopedInstances?.get(settingsKey);
     if (existing) {
       return existing;
     }
-    const manager = new OpenCodeServerManager({
-      logger,
-      runtimeSettings,
-      ...options,
-    });
+    const manager = new OpenCodeServerManager(managerOptions);
     if (scopedInstances) {
       scopedInstances.set(settingsKey, manager);
     } else {
