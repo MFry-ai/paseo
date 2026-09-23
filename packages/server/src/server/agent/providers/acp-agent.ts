@@ -144,6 +144,12 @@ function isACPError(value: unknown): value is ACPError {
   return isRecord(value) && typeof value.message === "string" && typeof value.code === "number";
 }
 
+// A provider answers a write for a config option the current model does not have with
+// `-32602 Invalid params` (cursor-agent adds `data.message="Unknown model config option: fast"`).
+function isACPConfigOptionRejection(error: unknown): boolean {
+  return isACPError(error) && error.code === -32602;
+}
+
 function extractACPErrorDataMessage(data: unknown): string | null {
   if (!isRecord(data)) {
     return null;
@@ -2277,7 +2283,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
 
     const option = findSelectConfigFeatureOption(this.configOptions, featureOption);
     if (!option) {
-      throw new Error(`${this.provider} does not expose ACP feature '${featureId}'`);
+      throw new Error(this.featureUnavailableMessage(featureId));
     }
 
     const requestedValue = normalizeConfigFeatureValue(value);
@@ -2840,7 +2846,20 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       if (!Object.prototype.hasOwnProperty.call(configuredFeatureValues, featureOption.id)) {
         continue;
       }
-      await this.setFeature(featureOption.id, configuredFeatureValues[featureOption.id]);
+      try {
+        await this.setFeature(featureOption.id, configuredFeatureValues[featureOption.id]);
+      } catch (error) {
+        if (
+          !this.isFeatureUnavailableError(error, featureOption.id) &&
+          !isACPConfigOptionRejection(error)
+        ) {
+          throw error;
+        }
+        this.logger.warn(
+          { err: error, featureId: featureOption.id, model: this.currentModel },
+          `${this.provider} cannot apply ACP feature '${featureOption.id}' to the current model; using the provider default`,
+        );
+      }
     }
   }
 
@@ -2854,6 +2873,14 @@ export class ACPAgentSession implements AgentSession, ACPClient {
 
   private isModelSelectionUnavailableError(error: unknown): boolean {
     return error instanceof Error && error.message === this.modelSelectionUnavailableMessage();
+  }
+
+  private featureUnavailableMessage(featureId: string): string {
+    return `${this.provider} does not expose ACP feature '${featureId}'`;
+  }
+
+  private isFeatureUnavailableError(error: unknown, featureId: string): boolean {
+    return error instanceof Error && error.message === this.featureUnavailableMessage(featureId);
   }
 
   private translateSessionUpdate(update: SessionUpdate): AgentStreamEvent[] {
